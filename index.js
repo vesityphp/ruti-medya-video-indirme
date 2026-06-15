@@ -8,23 +8,13 @@ app.set("json spaces", 2);
 app.use(morgan("dev"));
 app.use("/api/meta", require("./routes/facebookInsta"));
 app.use("/api/pinterest", require("./routes/pinterest"));
-app.use("/api/reddit", require("./routes/reddit"));
-app.use("/api/spotify", require("./routes/spotify"));
-app.use("/api/snapchat", require("./routes/snapchat"));
-app.use("/api/soundcloud", require("./routes/soundcloud"));
 app.use("/api/tiktok", require("./routes/tiktok"));
 app.use("/api/twitter", require("./routes/twitter"));
-app.use("/api/youtube", require("./routes/youtube"));
 const endpoints = [
   "/api/meta",
   "/api/pinterest",
-  "/api/reddit",
-  "/api/snapchat",
-  "/api/spotify",
-  "/api/soundcloud",
   "/api/tiktok",
   "/api/twitter",
-  "/api/youtube",
 ];
 app.get("/", (req, res) => {
   res.status(200).json({
