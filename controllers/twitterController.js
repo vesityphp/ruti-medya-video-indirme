@@ -1,0 +1,17 @@
+const { twitterDownloader } = require("../services/twitterService");
+const { decorateMediaResponse } = require("../utils/mediaResponse");
+async function handleTwitterDownload(req, res) {
+  const { url } = req.query;
+  if (!url) {
+    return res
+      .status(400)
+      .json({ success: false, error: "Missing 'url' query parameter." });
+  }
+  try {
+    const data = decorateMediaResponse(await twitterDownloader(url), "twitter-x");
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+}
+module.exports = { handleTwitterDownload };
