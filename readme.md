@@ -36,5 +36,5 @@ API; YouTube, Instagram, TikTok, Facebook, Twitter/X ve benzeri platformlardan g
 ---
 
 <div align="center">
-  <p>🤍 <b>made with vesityphp</b></p>
+  <p><b>made with 🤍 vesityphp</b></p>
 </div>
