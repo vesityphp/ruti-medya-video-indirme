@@ -116,7 +116,7 @@ function parseTikTokPage(html) {
   });
   if (downloads.length === 0) {
     const error = new Error(
-      "TikTok sayfası cevap verdi fakat indirme bağlantısı bulunamadı."
+      "İndirme bağlantısı bulunamadı veya sistem şu anda yoğun. Lütfen tekrar deneyin."
     );
     error.code = "EMPTY_RESULT";
     throw error;
