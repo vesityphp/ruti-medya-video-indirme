@@ -1,66 +1,157 @@
 const axios = require("axios");
 const cheerio = require("cheerio");
-/**
- * @param {string} tweetUrl
- */
-async function twitterDownloader(tweetUrl) {
-  if (!tweetUrl) throw new Error("Tweet URL is required");
+const REQUEST_TIMEOUT_MS = Number(process.env.MEDIA_REQUEST_TIMEOUT_MS) || 15000;
+const MAX_ATTEMPTS = Math.max(
+  1,
+  Number(process.env.MEDIA_REQUEST_ATTEMPTS) || 3
+);
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+function isHttpUrl(value) {
+  return typeof value === "string" && /^https?:\/\//i.test(value);
+}
+function absoluteUrl(value, baseUrl) {
+  if (!value || value === "#") return null;
+  try {
+    const resolved = new URL(value, baseUrl).href;
+    return isHttpUrl(resolved) ? resolved : null;
+  } catch {
+    return null;
+  }
+}
+function isRetryableError(error) {
+  if (error?.code === "EMPTY_RESULT") return true;
+  const retryableCodes = new Set([
+    "ECONNABORTED",
+    "ECONNRESET",
+    "ETIMEDOUT",
+    "EAI_AGAIN",
+    "ENOTFOUND",
+    "ERR_NETWORK",
+  ]);
+  if (retryableCodes.has(error?.code)) return true;
+  const status = error?.response?.status;
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+async function withRetry(task) {
+  let lastError;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await task(attempt);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= MAX_ATTEMPTS || !isRetryableError(error)) {
+        break;
+      }
+      await sleep(600 * attempt);
+    }
+  }
+  throw lastError;
+}
+function looksLikeImage(url, text) {
+  const combined = `${url || ""} ${text || ""}`.toLowerCase();
+  return (
+    /\.(?:jpe?g|png|webp)(?:$|[?#])/i.test(url || "") ||
+    combined.includes("image") ||
+    combined.includes("photo") ||
+    combined.includes("图片")
+  );
+}
+function extractQuality(text) {
+  const match = String(text || "").match(/(?:\(|\b)(\d{3,4}p)(?:\)|\b)/i);
+  return match ? match[1].toLowerCase() : "unknown";
+}
+async function requestTwitterPage(tweetUrl) {
   const endpoint = "https://savetwitter.net/api/ajaxSearch";
   const form = new URLSearchParams({
     q: tweetUrl,
     lang: "en",
     cftoken: "",
   });
-  const { data } = await axios.post(endpoint, form.toString(), {
+  return axios.post(endpoint, form.toString(), {
     headers: {
+      accept: "application/json, text/javascript, */*; q=0.01",
+      "accept-language": "en-US,en;q=0.9",
       "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
       origin: "https://savetwitter.net",
       referer: "https://savetwitter.net/en4",
       "x-requested-with": "XMLHttpRequest",
       "user-agent":
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
     },
-    timeout: 15000,
+    timeout: REQUEST_TIMEOUT_MS,
+    maxRedirects: 5,
   });
-  if (data.status !== "ok") {
-    throw new Error("Failed to fetch Twitter media");
+}
+function parseTwitterResponse(data) {
+  if (!data || (data.status !== "ok" && data.status !== true)) {
+    const error = new Error(
+      data?.mess || data?.message || "SaveTwitter geçerli cevap döndürmedi."
+    );
+    error.code = "EMPTY_RESULT";
+    throw error;
   }
-  const $ = cheerio.load(data.data);
+  const html = typeof data.data === "string" ? data.data : "";
+  if (!html.trim()) {
+    const error = new Error("SaveTwitter boş HTML döndürdü.");
+    error.code = "EMPTY_RESULT";
+    throw error;
+  }
+  const $ = cheerio.load(html);
   const tweetId = $("#TwitterId").val() || null;
-  const title =
-    $(".tw-middle h3").first().text().trim() || null;
-  const duration =
-    $(".tw-middle p").first().text().trim() || null;
-  const thumbnail =
+  const title = $(".tw-middle h3").first().text().trim() || null;
+  const duration = $(".tw-middle p").first().text().trim() || null;
+  const thumbnail = absoluteUrl(
     $(".thumbnail img").attr("src") ||
-    $(".download-items__thumb img").attr("src") ||
-    null;
+      $(".download-items__thumb img").attr("src"),
+    "https://savetwitter.net/"
+  );
   const videos = [];
   const images = [];
-  $(".tw-button-dl").each((_, el) => {
-    const href = $(el).attr("href");
-    const text = $(el).text();
-    if (!href || !href.includes("dl.snapcdn.app")) return;
-    if (text.includes("MP4")) {
-      const qualityMatch = text.match(/\((\d+p)\)/);
+  const seenVideos = new Set();
+  const seenImages = new Set();
+  $(".tw-button-dl[href], a.tw-button-dl[href]").each((_, element) => {
+    const rawHref = $(element).attr("href");
+    const href = absoluteUrl(rawHref, "https://savetwitter.net/");
+    const text = $(element).text().replace(/\s+/g, " ").trim();
+    if (!href) return;
+    if (looksLikeImage(href, text)) {
+      if (!seenImages.has(href)) {
+        seenImages.add(href);
+        images.push({ url: href });
+      }
+      return;
+    }
+    if (!seenVideos.has(href)) {
+      seenVideos.add(href);
       videos.push({
-        quality: qualityMatch ? qualityMatch[1] : "unknown",
+        quality: extractQuality(text),
+        ...(text ? { text } : {}),
         url: href,
       });
     }
-    if (text.includes("图片")) {
-      images.push({ url: href });
+  });
+  $(".photo-list img[src]").each((_, image) => {
+    const src = absoluteUrl($(image).attr("src"), "https://savetwitter.net/");
+    if (src && !seenImages.has(src)) {
+      seenImages.add(src);
+      images.push({ url: src });
     }
   });
-  $(".photo-list img").each((_, img) => {
-    const src = $(img).attr("src");
-    if (src) images.push({ url: src });
-  });
   videos.sort((a, b) => {
-    const qa = parseInt(a.quality) || 0;
-    const qb = parseInt(b.quality) || 0;
-    return qb - qa;
+    const qualityA = Number.parseInt(a.quality, 10) || 0;
+    const qualityB = Number.parseInt(b.quality, 10) || 0;
+    return qualityB - qualityA;
   });
+  if (videos.length === 0 && images.length === 0) {
+    const error = new Error(
+      "Twitter/X sayfası cevap verdi fakat medya bağlantısı bulunamadı."
+    );
+    error.code = "EMPTY_RESULT";
+    throw error;
+  }
   return {
     type: videos.length ? "video" : "photo",
     tweetId,
@@ -70,5 +161,22 @@ async function twitterDownloader(tweetUrl) {
     videos,
     images,
   };
+}
+async function twitterDownloader(tweetUrl) {
+  if (!tweetUrl || !isHttpUrl(tweetUrl)) {
+    throw new Error("Geçerli bir Twitter/X bağlantısı gerekli.");
+  }
+  try {
+    return await withRetry(async () => {
+      const response = await requestTwitterPage(tweetUrl);
+      return parseTwitterResponse(response.data);
+    });
+  } catch (error) {
+    const status = error?.response?.status;
+    const statusText = status ? ` (HTTP ${status})` : "";
+    throw new Error(
+      `Twitter/X indirme bağlantıları alınamadı${statusText}: ${error.message}`
+    );
+  }
 }
 module.exports = { twitterDownloader };
