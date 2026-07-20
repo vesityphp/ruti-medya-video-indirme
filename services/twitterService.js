@@ -88,7 +88,7 @@ async function requestTwitterPage(tweetUrl) {
 function parseTwitterResponse(data) {
   if (!data || (data.status !== "ok" && data.status !== true)) {
     const error = new Error(
-      data?.mess || data?.message || "SaveTwitter geçerli cevap döndürmedi."
+      data?.mess || data?.message || "İndirme bağlantısı bulunamadı veya sistem şu anda yoğun. Lütfen tekrar deneyin."
     );
     error.code = "EMPTY_RESULT";
     throw error;
@@ -147,7 +147,7 @@ function parseTwitterResponse(data) {
   });
   if (videos.length === 0 && images.length === 0) {
     const error = new Error(
-      "Twitter/X sayfası cevap verdi fakat medya bağlantısı bulunamadı."
+      "İndirme bağlantısı bulunamadı veya sistem şu anda yoğun. Lütfen tekrar deneyin."
     );
     error.code = "EMPTY_RESULT";
     throw error;
